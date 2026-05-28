@@ -12,11 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "",
+        "title": "Stash",
         "width": 800,
         "height": 600,
+        "resizable": true,
         "decorations": true,
-        "titleBarStyle": "Overlay"
+        "titleBarStyle": "Transparent"
       }
     ],
     "security": {

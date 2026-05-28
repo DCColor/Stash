@@ -118,11 +118,8 @@ export default function App() {
   };
 
   return (
-    <div data-tauri-drag-region className="min-h-screen bg-zinc-900 text-zinc-100 flex flex-col select-none">
-      <div data-tauri-drag-region className="flex items-center justify-center px-4 py-2 border-b border-zinc-800" style={{WebkitAppRegion: 'drag'} as any}>
-        <span className="text-sm font-bold text-zinc-400">Stash</span>
-        <span className="text-xs text-zinc-600 ml-2">by Graviton.Tools</span>
-      </div>
+    <div className="min-h-screen bg-zinc-900 text-zinc-100 flex flex-col select-none">
+      <div className="h-0.5 w-full bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600" />
       <div className="flex gap-1 px-4 py-2 border-b border-zinc-700">
         <button
           onClick={() => setActiveTab("clipboard")}

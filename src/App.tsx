@@ -4,6 +4,7 @@ import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { readDir, rename } from "@tauri-apps/plugin-fs";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 
 const MAX_CLIPS = 10;
 
@@ -11,6 +12,7 @@ interface ClipItem {
   id: string;
   text: string;
   timestamp: number;
+  source: string;
 }
 
 export default function App() {
@@ -35,10 +37,11 @@ export default function App() {
         const text = await readText();
         if (text && text !== lastClip && text.trim() !== "") {
           setLastClip(text);
+          const source = await invoke<string>("get_frontmost_app");
           setClips((prev) => {
             const exists = prev.find((c) => c.text === text);
             if (exists) return prev;
-            const newClip: ClipItem = { id: crypto.randomUUID(), text, timestamp: Date.now() };
+            const newClip: ClipItem = { id: crypto.randomUUID(), text, source, timestamp: Date.now() };
             return [newClip, ...prev].slice(0, MAX_CLIPS);
           });
         }
@@ -158,6 +161,7 @@ export default function App() {
               >
                 <span className="text-xs text-zinc-600 mt-0.5 w-4 shrink-0">{i + 1}</span>
                 <p className="text-sm text-zinc-200 flex-1 line-clamp-3 break-all">{clip.text}</p>
+                <p className="text-xs text-zinc-600 mt-1">from {clip.source}</p>
                 <button
                   onClick={(e) => { e.stopPropagation(); deleteClip(clip.id); }}
                   className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 text-xs transition-all shrink-0"

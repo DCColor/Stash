@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"Stash\" /Users/robbiecarman/Nextcloud/Vibe Code Output/Stash/Stash/src/App.tsx)",
+      "Read(//Users/robbiecarman/Nextcloud/**)"
+    ]
+  }
+}

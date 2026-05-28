@@ -38,6 +38,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![get_frontmost_app, set_menu_bar_mode])
         .setup(|app| {
             #[cfg(target_os = "macos")]

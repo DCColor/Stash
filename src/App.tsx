@@ -5,6 +5,7 @@ import { readDir, rename } from "@tauri-apps/plugin-fs";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 const MAX_CLIPS = 20;
 
@@ -108,16 +109,19 @@ export default function App() {
   }, [settings.menuBarMode]);
 
   useEffect(() => {
-    loadClips().then((saved) => {
-      if (saved.length > 0) {
-        setClips(saved);
-        setLastClip(saved[0].text);
-      }
-    });
+    const init = async () => {
+      const [saved, currentClip] = await Promise.all([
+        loadClips(),
+        readText().catch(() => "")
+      ]);
+      if (saved.length > 0) setClips(saved);
+      if (currentClip) setLastClip(currentClip);
+    };
+    init();
   }, []);
 
   useEffect(() => {
-    if (clips.length > 0) saveClips(clips);
+    saveClips(clips);
   }, [clips]);
 
   useEffect(() => {
@@ -173,15 +177,28 @@ export default function App() {
     });
   };
 
-  const loadFolder = async () => {
-    if (!folderPath.trim()) return;
-    try {
-      const entries = await readDir(folderPath);
-      const names = entries.filter((e) => e.name && !e.name.startsWith(".")).map((e) => e.name!).sort();
-      setFiles(names);
-      setRenameStatus("Loaded " + names.length + " files");
-    } catch {
-      setRenameStatus("Could not read folder - check the path");
+  const pickFolder = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose a folder to rename files in"
+    });
+    if (selected && typeof selected === "string") {
+      setFolderPath(selected);
+      setRenameStatus("Loading...");
+      try {
+        const entries = await readDir(selected);
+        const names = entries.filter((e) => e.name && !e.name.startsWith(".")).map((e) => e.name!).sort();
+        if (names.length < 2) {
+          setRenameStatus("Select a folder with 2 or more files — use Finder to rename single files");
+          setFiles([]);
+          return;
+        }
+        setFiles(names);
+        setRenameStatus("Loaded " + names.length + " files");
+      } catch (e) {
+        setRenameStatus("Error: " + String(e));
+      }
     }
   };
 
@@ -218,6 +235,16 @@ export default function App() {
     }
     setRenameStatus("Renamed " + count + " files");
     setFiles((prev) => prev.map((f) => { const m = preview.find((p) => p.original === f); return m ? m.renamed : f; }));
+    if (count > 0) {
+      setFindText("");
+      setReplaceText("");
+      setPrefix("");
+      setSuffix("");
+      setUseNumbering(false);
+      setFiles([]);
+      setPreview([]);
+      setFolderPath("");
+    }
   };
 
   const timeAgo = (timestamp: number): string => {
@@ -246,12 +273,6 @@ export default function App() {
           className={"px-3 py-1 rounded text-sm font-medium transition-colors " + (activeTab === "rename" ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white")}
         >
           Rename
-        </button>
-        <button
-          onClick={() => setActiveTab("settings")}
-          className={"px-3 py-1 rounded text-sm font-medium transition-colors " + (activeTab === "settings" ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white")}
-        >
-          Settings
         </button>
       </div>
 
@@ -309,12 +330,19 @@ export default function App() {
               </div>
             ))}
           </div>
-          <div className="px-4 py-2 border-t border-zinc-800 flex items-center justify-center">
+          <div className="px-4 py-2 border-t border-zinc-800 flex items-center justify-between">
+            <span
+              onClick={() => setActiveTab(prev => prev === "settings" ? "clipboard" : "settings")}
+              className="text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
+              title="Settings"
+            >
+              ⚙️
+            </span>
             <span
               onClick={() => openUrl("https://graviton.tools")}
               className="text-xs text-zinc-600 cursor-pointer hover:text-blue-400 transition-colors"
             >
-              More tools from Graviton.Tools
+              More from Graviton.Tools
             </span>
           </div>
         </div>
@@ -327,11 +355,11 @@ export default function App() {
               <input
                 type="text"
                 value={folderPath}
-                onChange={(e) => setFolderPath(e.target.value)}
-                placeholder="/Users/you/path/to/folder"
-                className="flex-1 bg-zinc-800 text-sm text-zinc-200 placeholder-zinc-600 rounded px-3 py-1.5 border border-zinc-700 focus:border-blue-500 focus:outline-none"
+                placeholder="Click Load to choose a folder..."
+                readOnly
+                className="flex-1 bg-zinc-800 text-sm text-zinc-200 placeholder-zinc-600 rounded px-3 py-1.5 border border-zinc-700 focus:outline-none"
               />
-              <button onClick={loadFolder} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors">Load</button>
+              <button onClick={pickFolder} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors">Load</button>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <input type="text" value={findText} onChange={(e) => setFindText(e.target.value)} placeholder="Find..." className="bg-zinc-800 text-sm text-zinc-200 placeholder-zinc-600 rounded px-3 py-1.5 border border-zinc-700 focus:border-blue-500 focus:outline-none" />
@@ -373,7 +401,16 @@ export default function App() {
             ))}
           </div>
           <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-between">
-            <span className="text-xs text-zinc-500">{renameStatus}</span>
+            <div className="flex items-center gap-3">
+              <span
+                onClick={() => setActiveTab(prev => prev === "settings" ? "rename" : "settings")}
+                className="text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
+                title="Settings"
+              >
+                ⚙️
+              </span>
+              <span className="text-xs text-zinc-500">{renameStatus}</span>
+            </div>
             <button
               onClick={doRename}
               disabled={preview.length === 0}

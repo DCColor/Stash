@@ -17,6 +17,7 @@
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:scope-appdata-recursive",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "dialog:allow-open"
   ]
 }

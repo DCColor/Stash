@@ -6,14 +6,38 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 
-const MAX_CLIPS = 10;
+const MAX_CLIPS = 20;
 
 interface ClipItem {
   id: string;
   text: string;
   timestamp: number;
   source: string;
+  pinned: boolean;
 }
+
+const CLIPS_FILE = "stash-clips.json";
+
+const saveClips = async (clips: ClipItem[]) => {
+  try {
+    const { appDataDir } = await import("@tauri-apps/api/path");
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const dir = await appDataDir();
+    await writeTextFile(dir + CLIPS_FILE, JSON.stringify(clips));
+  } catch {}
+};
+
+const loadClips = async (): Promise<ClipItem[]> => {
+  try {
+    const { appDataDir } = await import("@tauri-apps/api/path");
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    const dir = await appDataDir();
+    const data = await readTextFile(dir + CLIPS_FILE);
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+};
 
 export default function App() {
   const [clips, setClips] = useState<ClipItem[]>([]);
@@ -30,6 +54,20 @@ export default function App() {
   const [numberPadding, setNumberPadding] = useState(2);
   const [preview, setPreview] = useState<{ original: string; renamed: string }[]>([]);
   const [renameStatus, setRenameStatus] = useState("");
+  const [lockOrder, setLockOrder] = useState(false);
+
+  useEffect(() => {
+    loadClips().then((saved) => {
+      if (saved.length > 0) {
+        setClips(saved);
+        setLastClip(saved[0].text);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (clips.length > 0) saveClips(clips);
+  }, [clips]);
 
   useEffect(() => {
     const interval = setInterval(async () => {
@@ -41,7 +79,7 @@ export default function App() {
           setClips((prev) => {
             const exists = prev.find((c) => c.text === text);
             if (exists) return prev;
-            const newClip: ClipItem = { id: crypto.randomUUID(), text, source, timestamp: Date.now() };
+            const newClip: ClipItem = { id: crypto.randomUUID(), text, source, timestamp: Date.now(), pinned: false };
             return [newClip, ...prev].slice(0, MAX_CLIPS);
           });
         }
@@ -67,11 +105,22 @@ export default function App() {
 
   const pasteClip = async (clip: ClipItem) => {
     await writeText(clip.text);
-    setClips((prev) => [clip, ...prev.filter((c) => c.id !== clip.id)]);
+    if (!lockOrder && !clip.pinned) {
+      setClips((prev) => [clip, ...prev.filter((c) => c.id !== clip.id)]);
+    }
   };
 
   const deleteClip = (id: string) => setClips((prev) => prev.filter((c) => c.id !== id));
   const clearAll = () => setClips([]);
+
+  const togglePin = (id: string) => {
+    setClips((prev) => {
+      const updated = prev.map((c) => c.id === id ? { ...c, pinned: !c.pinned } : c);
+      const pinned = updated.filter((c) => c.pinned);
+      const unpinned = updated.filter((c) => !c.pinned);
+      return [...pinned, ...unpinned];
+    });
+  };
 
   const loadFolder = async () => {
     if (!folderPath.trim()) return;
@@ -120,6 +169,17 @@ export default function App() {
     setFiles((prev) => prev.map((f) => { const m = preview.find((p) => p.original === f); return m ? m.renamed : f; }));
   };
 
+  const timeAgo = (timestamp: number): string => {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return minutes + "m ago";
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + "h ago";
+    const days = Math.floor(hours / 24);
+    return days + "d ago";
+  };
+
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100 flex flex-col select-none">
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600" />
@@ -142,6 +202,15 @@ export default function App() {
         <div className="flex flex-col flex-1 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800">
             <span className="text-xs text-zinc-500">{clips.length} items</span>
+            <label className="flex items-center gap-1.5 text-xs text-zinc-500 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={lockOrder}
+                onChange={(e) => setLockOrder(e.target.checked)}
+                className="accent-blue-500"
+              />
+              Lock order
+            </label>
             {clips.length > 0 && (
               <button onClick={clearAll} className="text-xs text-zinc-500 hover:text-red-400 transition-colors">Clear all</button>
             )}
@@ -160,12 +229,26 @@ export default function App() {
                 onClick={() => pasteClip(clip)}
               >
                 <span className="text-xs text-zinc-600 mt-0.5 w-4 shrink-0">{i + 1}</span>
-                <p className="text-sm text-zinc-200 flex-1 line-clamp-3 break-all">{clip.text}</p>
-                <p className="text-xs text-zinc-600 mt-1">from {clip.source}</p>
-                <button
-                  onClick={(e) => { e.stopPropagation(); deleteClip(clip.id); }}
-                  className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 text-xs transition-all shrink-0"
-                >x</button>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-zinc-200 line-clamp-3 break-all">{clip.text}</p>
+                  <div className="flex items-center gap-2 mt-1.5 pt-1.5 border-t border-zinc-700">
+                    <span className="text-xs text-zinc-600">from {clip.source}</span>
+                    <span className="text-xs text-zinc-700">·</span>
+                    <span className="text-xs text-zinc-700">{timeAgo(clip.timestamp)}</span>
+                  </div>
+                </div>
+                <div className="flex flex-col items-center gap-2 ml-2 shrink-0">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); togglePin(clip.id); }}
+                    className={"text-base transition-all " + (clip.pinned ? "text-blue-400" : "opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-blue-400")}
+                  >
+                    {clip.pinned ? "★" : "☆"}
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteClip(clip.id); }}
+                    className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 text-xs transition-all"
+                  >x</button>
+                </div>
               </div>
             ))}
           </div>

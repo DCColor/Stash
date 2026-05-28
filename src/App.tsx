@@ -16,7 +16,36 @@ interface ClipItem {
   pinned: boolean;
 }
 
+interface Settings {
+  menuBarMode: boolean;
+  clipLimit: number;
+}
+
+const defaultSettings: Settings = { menuBarMode: false, clipLimit: 20 };
+
 const CLIPS_FILE = "stash-clips.json";
+const SETTINGS_FILE = "stash-settings.json";
+
+const saveSettings = async (s: Settings) => {
+  try {
+    const { appDataDir } = await import("@tauri-apps/api/path");
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const dir = await appDataDir();
+    await writeTextFile(dir + SETTINGS_FILE, JSON.stringify(s));
+  } catch {}
+};
+
+const loadSettings = async (): Promise<Settings> => {
+  try {
+    const { appDataDir } = await import("@tauri-apps/api/path");
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    const dir = await appDataDir();
+    const data = await readTextFile(dir + SETTINGS_FILE);
+    return { ...defaultSettings, ...JSON.parse(data) };
+  } catch {
+    return defaultSettings;
+  }
+};
 
 const saveClips = async (clips: ClipItem[]) => {
   try {
@@ -41,7 +70,7 @@ const loadClips = async (): Promise<ClipItem[]> => {
 
 export default function App() {
   const [clips, setClips] = useState<ClipItem[]>([]);
-  const [activeTab, setActiveTab] = useState<"clipboard" | "rename">("clipboard");
+  const [activeTab, setActiveTab] = useState<"clipboard" | "rename" | "settings">("clipboard");
   const [lastClip, setLastClip] = useState("");
   const [folderPath, setFolderPath] = useState("");
   const [files, setFiles] = useState<string[]>([]);
@@ -55,6 +84,28 @@ export default function App() {
   const [preview, setPreview] = useState<{ original: string; renamed: string }[]>([]);
   const [renameStatus, setRenameStatus] = useState("");
   const [lockOrder, setLockOrder] = useState(false);
+  const [settings, setSettings] = useState<Settings>(defaultSettings);
+
+  useEffect(() => {
+    loadSettings().then(setSettings);
+  }, []);
+
+  useEffect(() => {
+    saveSettings(settings);
+  }, [settings]);
+
+  useEffect(() => {
+    invoke("set_menu_bar_mode", { enabled: settings.menuBarMode });
+  }, [settings.menuBarMode]);
+
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let unlisten: (() => void) | null = null;
+    win.onFocusChanged(({ payload: focused }) => {
+      if (!focused && settings.menuBarMode) win.hide();
+    }).then(f => unlisten = f);
+    return () => { if (unlisten) unlisten(); };
+  }, [settings.menuBarMode]);
 
   useEffect(() => {
     loadClips().then((saved) => {
@@ -196,6 +247,12 @@ export default function App() {
         >
           Rename
         </button>
+        <button
+          onClick={() => setActiveTab("settings")}
+          className={"px-3 py-1 rounded text-sm font-medium transition-colors " + (activeTab === "settings" ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white")}
+        >
+          Settings
+        </button>
       </div>
 
       {activeTab === "clipboard" && (
@@ -324,6 +381,51 @@ export default function App() {
             >
               Rename files
             </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "settings" && (
+        <div className="flex flex-col flex-1 overflow-hidden">
+          <div className="px-4 py-3 border-b border-zinc-800">
+            <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">General</h2>
+            <div className="space-y-4">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <p className="text-sm text-zinc-200">Menu bar mode</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">
+                    {settings.menuBarMode
+                      ? "Living in menu bar — disable and restart to show dock icon"
+                      : "Enable to hide from dock and live in menu bar"}
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.menuBarMode}
+                  onChange={(e) => setSettings(s => ({ ...s, menuBarMode: e.target.checked }))}
+                  className="accent-blue-500 w-4 h-4"
+                />
+              </label>
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <p className="text-sm text-zinc-200">Clip limit</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">Max clips to keep in history</p>
+                </div>
+                <input
+                  type="number"
+                  value={settings.clipLimit}
+                  onChange={(e) => setSettings(s => ({ ...s, clipLimit: parseInt(e.target.value) || 20 }))}
+                  className="w-16 bg-zinc-800 text-sm text-zinc-200 rounded px-2 py-1 border border-zinc-700 focus:border-blue-500 focus:outline-none text-right"
+                />
+              </label>
+            </div>
+          </div>
+          <div className="px-4 py-3">
+            <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Shortcut</h2>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-zinc-200">Open Stash</p>
+              <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-1 rounded border border-zinc-700">⌘ ⇧ V</span>
+            </div>
           </div>
         </div>
       )}

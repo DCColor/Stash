@@ -20,9 +20,9 @@ fn set_menu_bar_mode(app: tauri::AppHandle, enabled: bool) {
     #[cfg(target_os = "macos")]
     {
         if enabled {
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
         } else {
-            app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
         }
     }
     if let Some(win) = app.get_webview_window("main") {
@@ -52,7 +52,7 @@ pub fn run() {
                     .and_then(|v| v.get("menuBarMode").and_then(|m| m.as_bool()))
                     .unwrap_or(false);
                 if menu_bar_mode {
-                    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 }
             }
 

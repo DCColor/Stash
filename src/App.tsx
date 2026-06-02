@@ -310,9 +310,9 @@ export default function App() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-zinc-200 line-clamp-3 break-all">{clip.text}</p>
                   <div className="flex items-center gap-2 mt-1.5 pt-1.5 border-t border-zinc-700">
-                    <span className="text-xs text-zinc-600">from {clip.source}</span>
+                    <span className="text-xs text-zinc-500">from {clip.source}</span>
                     <span className="text-xs text-zinc-700">·</span>
-                    <span className="text-xs text-zinc-700">{timeAgo(clip.timestamp)}</span>
+                    <span className="text-xs text-zinc-500">{timeAgo(clip.timestamp)}</span>
                   </div>
                 </div>
                 <div className="flex flex-col items-center gap-2 ml-2 shrink-0">

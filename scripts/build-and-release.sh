@@ -39,6 +39,9 @@ mkdir -p "src-tauri/target/release/bundle/dmg"
 TMP_DIR=$(mktemp -d)
 cp -r "$APP_PATH" "$TMP_DIR/Stash.app"
 ln -s /Applications "$TMP_DIR/Applications"
+# Set volume icon
+cp "src-tauri/icons/icon.icns" "$TMP_DIR/.VolumeIcon.icns"
+SetFile -a C "$TMP_DIR" 2>/dev/null || true
 hdiutil create \
   -volname "Stash" \
   -srcfolder "$TMP_DIR" \
@@ -46,6 +49,11 @@ hdiutil create \
   -format UDZO \
   "$DMG_PATH"
 rm -rf "$TMP_DIR"
+# Set icon on DMG itself
+DeRez -only icns "src-tauri/icons/icon.icns" > /tmp/icns.rsrc
+Rez -append /tmp/icns.rsrc -o "$DMG_PATH"
+SetFile -a C "$DMG_PATH" 2>/dev/null || true
+rm /tmp/icns.rsrc
 echo "  done: $DMG_NAME"
 
 echo ""
@@ -54,6 +62,7 @@ xcrun notarytool submit "$DMG_PATH" \
   --keychain-profile graviton-notarytool \
   --wait
 xcrun stapler staple "$DMG_PATH"
+xcrun stapler staple "$APP_PATH"
 echo "  done"
 
 echo ""

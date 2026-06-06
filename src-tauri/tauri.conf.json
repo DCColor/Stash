@@ -34,6 +34,11 @@
       "icons/icon.icns",
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Amigo Media LLC (8UQ7MDM87B)",
+      "hardenedRuntime": true,
+      "entitlements": "./entitlements.plist"
+    }
   }
 }

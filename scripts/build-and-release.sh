@@ -21,7 +21,16 @@ echo "  done"
 
 echo ""
 echo "Building Stash.app..."
+export APPLE_KEYCHAIN_PROFILE=graviton-notarytool
 npm run tauri build -- --bundles app
+echo "  done"
+
+echo ""
+echo "Signing app..."
+codesign --force --deep --sign "Developer ID Application: Amigo Media LLC (8UQ7MDM87B)" \
+  --entitlements src-tauri/entitlements.plist \
+  --options runtime \
+  "$APP_PATH"
 echo "  done"
 
 echo ""
@@ -38,6 +47,14 @@ hdiutil create \
   "$DMG_PATH"
 rm -rf "$TMP_DIR"
 echo "  done: $DMG_NAME"
+
+echo ""
+echo "Notarizing..."
+xcrun notarytool submit "$DMG_PATH" \
+  --keychain-profile graviton-notarytool \
+  --wait
+xcrun stapler staple "$DMG_PATH"
+echo "  done"
 
 echo ""
 echo "Uploading to R2..."

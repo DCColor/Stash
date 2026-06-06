@@ -4,8 +4,8 @@ set -e
 VERSION=$(node -p "require('./package.json').version")
 BUCKET="graviton"
 PRODUCT="stash"
-DMG_NAME="Stash_${VERSION}_aarch64.dmg"
-APP_PATH="src-tauri/target/release/bundle/macos/Stash.app"
+DMG_NAME="Stash_${VERSION}_universal.dmg"
+APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Stash.app"
 DMG_PATH="src-tauri/target/release/bundle/dmg/${DMG_NAME}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -22,7 +22,7 @@ echo "  done"
 echo ""
 echo "Building Stash.app..."
 export APPLE_KEYCHAIN_PROFILE=graviton-notarytool
-npm run tauri build -- --bundles app
+npm run tauri build -- --bundles app --target universal-apple-darwin
 echo "  done"
 
 echo ""

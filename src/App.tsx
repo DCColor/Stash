@@ -350,7 +350,7 @@ export default function App() {
           </div>
           <div className="px-4 py-2 border-t border-zinc-800 flex items-center justify-between">
             <span
-              onClick={() => setActiveTab(activeTab === "settings" ? "clipboard" : "settings")}
+              onClick={() => setActiveTab((prev) => prev === "settings" ? "clipboard" : "settings")}
               className="relative text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
               title="Settings"
             >
@@ -424,7 +424,7 @@ export default function App() {
           <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span
-                onClick={() => setActiveTab(activeTab === "settings" ? "rename" : "settings")}
+                onClick={() => setActiveTab((prev) => prev === "settings" ? "rename" : "settings")}
                 className="relative text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
                 title="Settings"
               >

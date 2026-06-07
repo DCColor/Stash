@@ -5,7 +5,7 @@ VERSION=$(node -p "require('./package.json').version")
 BUCKET="graviton"
 PRODUCT="stash"
 DMG_NAME="Stash_${VERSION}_universal.dmg"
-APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Stash.app"
+APP_PATH="src-tauri/target/release/bundle/macos/Stash.app"
 DMG_PATH="src-tauri/target/release/bundle/dmg/${DMG_NAME}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

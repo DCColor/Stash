@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getVersion } from "@tauri-apps/api/app";
 
 const MAX_CLIPS = 20;
 
@@ -86,9 +87,26 @@ export default function App() {
   const [renameStatus, setRenameStatus] = useState("");
   const [lockOrder, setLockOrder] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
 
   useEffect(() => {
     loadSettings().then(setSettings);
+  }, []);
+
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      try {
+        const currentVersion = await getVersion();
+        const res = await fetch("https://releases.graviton.tools/stash/manifest");
+        const manifest = await res.json();
+        const latest = manifest.version;
+        if (latest && latest !== currentVersion) {
+          setUpdateAvailable(latest);
+        }
+      } catch {}
+    };
+    const timer = setTimeout(checkForUpdates, 3000);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -332,11 +350,14 @@ export default function App() {
           </div>
           <div className="px-4 py-2 border-t border-zinc-800 flex items-center justify-between">
             <span
-              onClick={() => setActiveTab(prev => prev === "settings" ? "clipboard" : "settings")}
-              className="text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
+              onClick={() => setActiveTab(activeTab === "settings" ? "clipboard" : "settings")}
+              className="relative text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
               title="Settings"
             >
               ⚙️
+              {updateAvailable && (
+                <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full" />
+              )}
             </span>
             <span
               onClick={() => openUrl("https://graviton.tools")}
@@ -403,11 +424,14 @@ export default function App() {
           <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span
-                onClick={() => setActiveTab(prev => prev === "settings" ? "rename" : "settings")}
-                className="text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
+                onClick={() => setActiveTab(activeTab === "settings" ? "rename" : "settings")}
+                className="relative text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
                 title="Settings"
               >
                 ⚙️
+                {updateAvailable && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full" />
+                )}
               </span>
               <span className="text-xs text-zinc-500">{renameStatus}</span>
             </div>
@@ -463,6 +487,42 @@ export default function App() {
               <p className="text-sm text-zinc-200">Open Stash</p>
               <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-1 rounded border border-zinc-700">⌘ ⇧ V</span>
             </div>
+          </div>
+          <div className="px-4 py-3 border-t border-zinc-800">
+            <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Updates</h2>
+            {updateAvailable ? (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-zinc-200">v{updateAvailable} available</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">You are on an older version</p>
+                </div>
+                <button
+                  onClick={() => openUrl("https://releases.graviton.tools/stash/mac")}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors"
+                >
+                  Download
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-zinc-400">Stash is up to date</p>
+                <button
+                  onClick={async () => {
+                    try {
+                      const currentVersion = await getVersion();
+                      const res = await fetch("https://releases.graviton.tools/stash/manifest");
+                      const manifest = await res.json();
+                      if (manifest.version !== currentVersion) {
+                        setUpdateAvailable(manifest.version);
+                      }
+                    } catch {}
+                  }}
+                  className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+                >
+                  Check now
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -4,9 +4,19 @@ set -e
 VERSION=$(node -p "require('./package.json').version")
 BUCKET="graviton"
 PRODUCT="stash"
-DMG_NAME="Stash_${VERSION}_universal.dmg"
+# Graviton naming convention: <App>-<version>-<arch>.<ext> (DISTRIBUTION.md).
+# The old Stash_<version>_universal.dmg was a lie after the Intel drop — the build is
+# arm64-only. Set explicitly here rather than left to a Tauri default: this script builds
+# the DMG with hdiutil (Tauri's bundle_dmg.sh is broken on macOS 26), so this IS the config.
+#
+# ⚠️ DMG_PATH must match the `stash)` case block in Graviton-Releases/upload-release.sh
+# verbatim — it declares release/bundle/dmg/Stash-${VERSION}-arm64.dmg, resolved relative
+# to the uploader's working directory, which is this repo root (where package.json is read
+# from). Hence a repo-root release/ rather than somewhere under src-tauri/target/, matching
+# the release/mac/... convention the Electron products use.
+DMG_NAME="Stash-${VERSION}-arm64.dmg"
 APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Stash.app"
-DMG_PATH="src-tauri/target/release/bundle/dmg/${DMG_NAME}"
+DMG_PATH="release/bundle/dmg/${DMG_NAME}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Stash v${VERSION} — Build & Release"

@@ -19,6 +19,19 @@ interface ClipItem {
   pinned: boolean;
 }
 
+interface FileDates {
+  path: string;
+  name: string;
+  created: number;
+  modified: number;
+}
+
+type DateOp =
+  | { kind: "set" }
+  | { kind: "createdToModified" }
+  | { kind: "modifiedToCreated" }
+  | { kind: "shift"; seconds: number };
+
 interface Settings {
   menuBarMode: boolean;
   clipLimit: number;
@@ -75,7 +88,7 @@ const loadClips = async (): Promise<ClipItem[]> => {
 
 export default function App() {
   const [clips, setClips] = useState<ClipItem[]>([]);
-  const [activeTab, setActiveTab] = useState<"clipboard" | "rename" | "settings">("clipboard");
+  const [activeTab, setActiveTab] = useState<"clipboard" | "rename" | "dates" | "settings">("clipboard");
   const [lastClip, setLastClip] = useState("");
   const [folderPath, setFolderPath] = useState("");
   const [files, setFiles] = useState<string[]>([]);
@@ -88,6 +101,12 @@ export default function App() {
   const [numberPadding, setNumberPadding] = useState(2);
   const [preview, setPreview] = useState<{ original: string; renamed: string }[]>([]);
   const [renameStatus, setRenameStatus] = useState("");
+  const [dateFiles, setDateFiles] = useState<FileDates[]>([]);
+  const [dayValue, setDayValue] = useState("");
+  const [timeValue, setTimeValue] = useState("");
+  const [dateTarget, setDateTarget] = useState<"modified" | "created" | "both">("modified");
+  const [dateStatus, setDateStatus] = useState("");
+  const [pendingOp, setPendingOp] = useState<DateOp | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
   const [axGranted, setAxGranted] = useState(false);
@@ -342,6 +361,87 @@ export default function App() {
     return days + "d ago";
   };
 
+  const refreshDates = async (paths: string[]) => {
+    const rows = await invoke<FileDates[]>("get_file_dates", { paths });
+    setDateFiles(rows);
+    return rows;
+  };
+
+  const pickDateFiles = async () => {
+    const selected = await open({ multiple: true, title: "Choose files" });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    const rows = await refreshDates(paths);
+    setDateStatus(`Loaded ${rows.length} files`);
+  };
+
+  const pickDateFolder = async () => {
+    const selected = await open({ directory: true, multiple: false, title: "Choose a folder" });
+    if (!selected || typeof selected !== "string") return;
+    const paths = await invoke<string[]>("list_folder_files", { folder: selected });
+    const rows = await refreshDates(paths);
+    setDateStatus(`Loaded ${rows.length} files`);
+  };
+
+  const applyDates = async () => {
+    if (!pendingOp || dateFiles.length === 0) return;
+    const op = pendingOp;
+    let secs = 0;
+    if (op.kind === "set") {
+      if (!dayValue) { setDateStatus("Pick a date first"); return; }
+      const time = timeValue || "00:00:00";
+      secs = Math.floor(new Date(`${dayValue}T${time}`).getTime() / 1000);
+      if (!secs || isNaN(secs)) { setDateStatus("That date could not be read"); return; }
+    }
+    let count = 0;
+    let firstError = "";
+    for (const f of dateFiles) {
+      let created: number | null = null;
+      let modified: number | null = null;
+      if (op.kind === "set") {
+        if (dateTarget === "created" || dateTarget === "both") created = secs;
+        if (dateTarget === "modified" || dateTarget === "both") modified = secs;
+      } else if (op.kind === "createdToModified") {
+        modified = f.created;
+      } else if (op.kind === "modifiedToCreated") {
+        created = f.modified;
+      } else {
+        if (dateTarget === "created" || dateTarget === "both") created = f.created + op.seconds;
+        if (dateTarget === "modified" || dateTarget === "both") modified = f.modified + op.seconds;
+      }
+      try {
+        await invoke("set_file_dates", { path: f.path, created, modified });
+        count++;
+      } catch (e) {
+        if (!firstError) firstError = String(e);
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+    await refreshDates(dateFiles.map((f) => f.path));
+    setPendingOp(null);
+    setDateStatus(firstError ? `Updated ${count} — error: ${firstError}` : `Updated ${count} files`);
+  };
+
+  const pendingLabel = (): string => {
+    if (!pendingOp) return "";
+    const target = dateTarget === "both" ? "created and modified" : dateTarget;
+    if (pendingOp.kind === "set") {
+      if (!dayValue) return "Pick a date first";
+      return `Set ${target} to ${dayValue} ${timeValue || "00:00:00"}`;
+    }
+    if (pendingOp.kind === "createdToModified") return "Copy created date onto modified";
+    if (pendingOp.kind === "modifiedToCreated") return "Copy modified date onto created";
+    const hrs = pendingOp.seconds / 3600;
+    const amount = Math.abs(hrs) >= 24 ? `${Math.abs(hrs) / 24}d` : `${Math.abs(hrs)}h`;
+    return `Shift ${target} by ${pendingOp.seconds < 0 ? "-" : "+"}${amount}`;
+  };
+
+  const fmtDate = (secs: number) =>
+    secs ? new Date(secs * 1000).toLocaleString(undefined, {
+      year: "numeric", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit"
+    }) : "—";
+
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100 flex flex-col select-none">
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600" />
@@ -357,6 +457,12 @@ export default function App() {
           className={"px-3 py-1 rounded text-sm font-medium transition-colors " + (activeTab === "rename" ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white")}
         >
           Rename
+        </button>
+        <button
+          onClick={() => setActiveTab("dates")}
+          className={"px-3 py-1 rounded text-sm font-medium transition-colors " + (activeTab === "dates" ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white")}
+        >
+          Dates
         </button>
       </div>
 
@@ -504,6 +610,125 @@ export default function App() {
             >
               Rename files
             </button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "dates" && (
+        <div className="flex flex-col flex-1 overflow-hidden">
+          <div className="px-4 py-3 space-y-3 border-b border-zinc-800">
+            <div className="flex gap-2">
+              <button onClick={pickDateFiles} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors">Choose files</button>
+              <button onClick={pickDateFolder} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm rounded border border-zinc-700 transition-colors">Choose folder</button>
+              {dateFiles.length > 0 && (
+                <button onClick={() => { setDateFiles([]); setDateStatus(""); setPendingOp(null); }} className="ml-auto text-xs text-zinc-500 hover:text-red-400 transition-colors">Clear</button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={dayValue}
+                onChange={(e) => { setDayValue(e.target.value); setPendingOp({ kind: "set" }); }}
+                className="bg-zinc-800 text-sm text-zinc-200 rounded px-2 py-1.5 border border-zinc-700 focus:border-blue-500 focus:outline-none"
+              />
+              <input
+                type="time"
+                step="1"
+                value={timeValue}
+                onChange={(e) => { setTimeValue(e.target.value); setPendingOp({ kind: "set" }); }}
+                className="bg-zinc-800 text-sm text-zinc-200 rounded px-2 py-1.5 border border-zinc-700 focus:border-blue-500 focus:outline-none"
+              />
+              <button
+                onClick={() => {
+                  const d = new Date();
+                  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+                  const iso = d.toISOString();
+                  setDayValue(iso.slice(0, 10));
+                  setTimeValue(iso.slice(11, 19));
+                  setPendingOp({ kind: "set" });
+                }}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Now
+              </button>
+              <select
+                value={dateTarget}
+                onChange={(e) => setDateTarget(e.target.value as any)}
+                className="ml-auto bg-zinc-800 text-sm text-zinc-200 rounded px-2 py-1.5 border border-zinc-700 focus:border-blue-500 focus:outline-none"
+              >
+                <option value="modified">Modified</option>
+                <option value="created">Created</option>
+                <option value="both">Both</option>
+              </select>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {([
+                ["Created to Modified", { kind: "createdToModified" } as DateOp],
+                ["Modified to Created", { kind: "modifiedToCreated" } as DateOp],
+              ] as [string, DateOp][]).map(([label, op]) => (
+                <button
+                  key={label}
+                  onClick={() => setPendingOp(op)}
+                  className={"px-2 py-1 text-xs rounded border transition-colors " + (pendingOp?.kind === op.kind ? "bg-blue-600 border-blue-500 text-white" : "bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-300")}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="text-xs text-zinc-600 ml-1">Shift</span>
+              {([["-1h", -3600], ["+1h", 3600], ["-1d", -86400], ["+1d", 86400]] as [string, number][]).map(([label, secs]) => (
+                <button
+                  key={label}
+                  onClick={() => setPendingOp({ kind: "shift", seconds: secs })}
+                  className={"px-2 py-1 text-xs rounded border transition-colors " + (pendingOp?.kind === "shift" && pendingOp.seconds === secs ? "bg-blue-600 border-blue-500 text-white" : "bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-300")}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={applyDates}
+                disabled={!pendingOp || dateFiles.length === 0}
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
+              >
+                Apply to {dateFiles.length} {dateFiles.length === 1 ? "file" : "files"}
+              </button>
+              <span className="text-xs text-zinc-500">{pendingLabel()}</span>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-3 py-2">
+            {dateFiles.length === 0 && (
+              <div className="flex items-center justify-center h-32 text-zinc-600 text-sm">Choose files or a folder to get started</div>
+            )}
+            {dateFiles.map((f) => (
+              <div key={f.path} className="py-2 border-b border-zinc-800">
+                <p className="text-sm text-zinc-200 truncate">{f.name}</p>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="text-xs text-zinc-500">Created {fmtDate(f.created)}</span>
+                  <span className="text-xs text-zinc-700">·</span>
+                  <span className="text-xs text-zinc-500">Modified {fmtDate(f.modified)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span
+                onClick={() => setActiveTab((prev) => prev === "settings" ? "dates" : "settings")}
+                className="relative text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
+                title="Settings"
+              >
+                ⚙️
+                {updateAvailable && <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full" />}
+              </span>
+              <span className="text-xs text-zinc-500">{dateStatus}</span>
+            </div>
+            <span className="text-xs text-zinc-600">{dateFiles.length} files</span>
           </div>
         </div>
       )}

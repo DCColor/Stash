@@ -141,7 +141,12 @@ export default function App() {
         if (latest && latest !== currentVersion) {
           setUpdateAvailable(latest);
         }
-      } catch {}
+      } catch (e) {
+        // Never surfaced in the UI — the updater must not block or error the app —
+        // but it must not be invisible either: an empty catch here hid a CSP that
+        // blocked every update check in packaged builds.
+        console.error("Update check failed:", e);
+      }
     };
     const timer = setTimeout(checkForUpdates, 3000);
     return () => clearTimeout(timer);
@@ -848,7 +853,9 @@ export default function App() {
                       if (manifest.version !== currentVersion) {
                         setUpdateAvailable(manifest.version);
                       }
-                    } catch {}
+                    } catch (e) {
+                      console.error("Update check failed:", e);
+                    }
                   }}
                   className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
                 >

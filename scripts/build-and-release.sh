@@ -5,7 +5,7 @@ VERSION=$(node -p "require('./package.json').version")
 BUCKET="graviton"
 PRODUCT="stash"
 DMG_NAME="Stash_${VERSION}_universal.dmg"
-APP_PATH="src-tauri/target/universal-apple-darwin/release/bundle/macos/Stash.app"
+APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Stash.app"
 DMG_PATH="src-tauri/target/release/bundle/dmg/${DMG_NAME}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -21,8 +21,19 @@ echo "  done"
 
 echo ""
 echo "Building Stash.app..."
-npm run tauri build -- --bundles app --target universal-apple-darwin
+npm run tauri build -- --bundles app --target aarch64-apple-darwin
 echo "  done"
+
+if [ ! -d "$APP_PATH" ]; then
+  echo "ERROR: $APP_PATH does not exist — build did not produce a bundle"
+  exit 1
+fi
+
+if [ -n "$(find "$APP_PATH" -maxdepth 0 -mmin +5)" ]; then
+  echo "ERROR: $APP_PATH is more than 5 minutes old — likely a stale bundle from a previous build"
+  echo "Delete src-tauri/target/aarch64-apple-darwin/release/bundle and re-run"
+  exit 1
+fi
 
 echo ""
 echo "Creating DMG..."

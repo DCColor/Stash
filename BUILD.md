@@ -37,13 +37,14 @@ After release, the DMG is available at:
 
 ## Version
 
-Bump version in both files before releasing:
+Bump version in all three files before releasing:
 - `package.json`
 - `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
 
-Or use sed to bump both at once:
 ```bash
 sed -i '' 's/"version": "OLD"/"version": "NEW"/' package.json src-tauri/tauri.conf.json
+sed -i '' 's/^version = "OLD"/version = "NEW"/' src-tauri/Cargo.toml
 ```
 
 ## Code Signing
@@ -62,12 +63,12 @@ Signing requires:
 
 ## Architecture
 
-Builds as a universal binary (Apple Silicon + Intel) via `--target universal-apple-darwin`.
-Requires both Rust targets installed:
-```bash
-rustup target add x86_64-apple-darwin
-rustup target add aarch64-apple-darwin
-```
+Builds arm64 only (Apple Silicon). Intel support dropped as of 0.5.8.
+Requires: `rustup target add aarch64-apple-darwin`
+
+NOTE: DMG_NAME in `scripts/build-and-release.sh` still produces `_universal.dmg` — this is
+intentionally unchanged pending alignment with the Graviton-Releases pipeline. The
+filename and the manifest asset keys need to move together, not separately.
 
 ## Verifying a Signed Build
 
@@ -93,7 +94,7 @@ Tauri's built-in DMG bundler (`bundle_dmg.sh`) fails on macOS 26 with "Not enoug
 ## Prerequisites (one-time setup)
 
 - Rust installed (`rustup`)
-- Both targets: `rustup target add x86_64-apple-darwin aarch64-apple-darwin`
+- Rust target: `rustup target add aarch64-apple-darwin`
 - Node.js 22+
 - Wrangler authenticated via OAuth (`wrangler login`)
 - Developer ID cert in keychain

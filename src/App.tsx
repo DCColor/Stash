@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { readDir, rename } from "@tauri-apps/plugin-fs";
@@ -9,6 +9,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 
 const MAX_CLIPS = 20;
+const MAX_PINS = 5;
 
 interface ClipItem {
   id: string;
@@ -21,9 +22,11 @@ interface ClipItem {
 interface Settings {
   menuBarMode: boolean;
   clipLimit: number;
+  clipShortcuts: boolean;
+  lockOrder: boolean;
 }
 
-const defaultSettings: Settings = { menuBarMode: false, clipLimit: 20 };
+const defaultSettings: Settings = { menuBarMode: false, clipLimit: 20, clipShortcuts: true, lockOrder: false };
 
 const CLIPS_FILE = "stash-clips.json";
 const SETTINGS_FILE = "stash-settings.json";
@@ -85,9 +88,25 @@ export default function App() {
   const [numberPadding, setNumberPadding] = useState(2);
   const [preview, setPreview] = useState<{ original: string; renamed: string }[]>([]);
   const [renameStatus, setRenameStatus] = useState("");
-  const [lockOrder, setLockOrder] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+  const [axGranted, setAxGranted] = useState(false);
+  const [pinStatus, setPinStatus] = useState("");
+  const clipsRef = useRef<ClipItem[]>([]);
+
+  useEffect(() => { clipsRef.current = clips; }, [clips]);
+
+  useEffect(() => {
+    const check = async () => {
+      try { setAxGranted(await invoke<boolean>("check_accessibility")); } catch {}
+    };
+    check();
+    const win = getCurrentWindow();
+    let unlisten: (() => void) | null = null;
+    win.onFocusChanged(({ payload: focused }) => { if (focused) check(); })
+      .then(f => { unlisten = f; });
+    return () => { if (unlisten) unlisten(); };
+  }, []);
 
   useEffect(() => {
     loadSettings().then(setSettings);
@@ -162,23 +181,63 @@ export default function App() {
   }, [lastClip]);
 
   useEffect(() => {
+    let cancelled = false;
+
     const setup = async () => {
       try {
         await unregisterAll();
-        await register("CommandOrControl+Shift+V", async () => {
+      } catch (e) {
+        console.error("[stash] unregisterAll failed", e);
+      }
+      if (cancelled) return;
+
+      try {
+        await register("CommandOrControl+Shift+V", async (event) => {
+          if (event.state !== "Pressed") return;
           const win = getCurrentWindow();
           await win.show();
           await win.setFocus();
         });
-      } catch {}
+      } catch (e) {
+        console.error("[stash] summon registration failed", e);
+      }
+
+      if (cancelled || !settings.clipShortcuts) return;
+
+      for (let i = 0; i < 5; i++) {
+        if (cancelled) return;
+        const accel = `Command+Control+Digit${i + 1}`;
+        try {
+          await register(accel, async (event) => {
+            if (event.state !== "Pressed") return;
+            const clip = clipsRef.current[i];
+            if (!clip) return;
+            await writeText(clip.text);
+            try {
+              if (await invoke<boolean>("check_accessibility")) {
+                await invoke("paste_to_frontmost");
+              }
+            } catch (e) {
+              console.error("[stash] paste failed", e);
+            }
+          });
+        } catch (e) {
+          console.error("[stash] failed to register", accel, e);
+        }
+      }
     };
+
     setup();
-    return () => { unregisterAll(); };
-  }, []);
+
+    return () => {
+      cancelled = true;
+      unregisterAll().catch(() => {});
+    };
+  }, [settings.clipShortcuts]);
 
   const pasteClip = async (clip: ClipItem) => {
     await writeText(clip.text);
-    if (!lockOrder && !clip.pinned) {
+    if (!settings.lockOrder && !clip.pinned) {
       setClips((prev) => [clip, ...prev.filter((c) => c.id !== clip.id)]);
     }
   };
@@ -187,6 +246,13 @@ export default function App() {
   const clearAll = () => setClips([]);
 
   const togglePin = (id: string) => {
+    const target = clips.find((c) => c.id === id);
+    if (!target) return;
+    if (!target.pinned && clips.filter((c) => c.pinned).length >= MAX_PINS) {
+      setPinStatus(`Only ${MAX_PINS} clips can be pinned`);
+      setTimeout(() => setPinStatus(""), 2500);
+      return;
+    }
     setClips((prev) => {
       const updated = prev.map((c) => c.id === id ? { ...c, pinned: !c.pinned } : c);
       const pinned = updated.filter((c) => c.pinned);
@@ -297,16 +363,9 @@ export default function App() {
       {activeTab === "clipboard" && (
         <div className="flex flex-col flex-1 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800">
-            <span className="text-xs text-zinc-500">{clips.length} items</span>
-            <label className="flex items-center gap-1.5 text-xs text-zinc-500 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={lockOrder}
-                onChange={(e) => setLockOrder(e.target.checked)}
-                className="accent-blue-500"
-              />
-              Lock order
-            </label>
+            <span className="text-xs text-zinc-500">
+              {pinStatus || `${clips.length} items`}
+            </span>
             {clips.length > 0 && (
               <button onClick={clearAll} className="text-xs text-zinc-500 hover:text-red-400 transition-colors">Clear all</button>
             )}
@@ -331,6 +390,9 @@ export default function App() {
                     <span className="text-xs text-zinc-500">from {clip.source}</span>
                     <span className="text-xs text-zinc-700">·</span>
                     <span className="text-xs text-zinc-500">{timeAgo(clip.timestamp)}</span>
+                    {settings.clipShortcuts && i < 5 && (
+                      <span className="ml-auto text-xs text-zinc-600 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-700">⌘⌃{i + 1}</span>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-col items-center gap-2 ml-2 shrink-0">
@@ -338,7 +400,7 @@ export default function App() {
                     onClick={(e) => { e.stopPropagation(); togglePin(clip.id); }}
                     className={"text-base transition-all " + (clip.pinned ? "text-blue-400" : "opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-blue-400")}
                   >
-                    {clip.pinned ? "★" : "☆"}
+                    {clip.pinned ? "📌" : "📍"}
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); deleteClip(clip.id); }}
@@ -479,6 +541,18 @@ export default function App() {
                   className="w-16 bg-zinc-800 text-sm text-zinc-200 rounded px-2 py-1 border border-zinc-700 focus:border-blue-500 focus:outline-none text-right"
                 />
               </label>
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <p className="text-sm text-zinc-200">Lock order</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">Clicking a clip won't move it to the top</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.lockOrder}
+                  onChange={(e) => setSettings(s => ({ ...s, lockOrder: e.target.checked }))}
+                  className="accent-blue-500 w-4 h-4"
+                />
+              </label>
             </div>
           </div>
           <div className="px-4 py-3">
@@ -486,6 +560,40 @@ export default function App() {
             <div className="flex items-center justify-between">
               <p className="text-sm text-zinc-200">Open Stash</p>
               <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-1 rounded border border-zinc-700">⌘ ⇧ V</span>
+            </div>
+          </div>
+          <div className="px-4 py-3 border-t border-zinc-800">
+            <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Quick paste</h2>
+            <div className="space-y-4">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <p className="text-sm text-zinc-200">Clip shortcuts</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">⌘⌃1–5 paste the top five clips. Pin a clip to keep it in a fixed slot.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.clipShortcuts}
+                  onChange={(e) => setSettings(s => ({ ...s, clipShortcuts: e.target.checked }))}
+                  className="accent-blue-500 w-4 h-4"
+                />
+              </label>
+              {settings.clipShortcuts && !axGranted && (
+                <div className="rounded-lg border border-blue-900 bg-blue-950/40 p-3">
+                  <p className="text-sm text-zinc-200">Accessibility permission needed</p>
+                  <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
+                    macOS requires permission before Stash can paste into another app. Without it the shortcuts still copy the clip — you'd press ⌘V yourself. Open Privacy &amp; Security, turn on Stash under Accessibility, then come back.
+                  </p>
+                  <button
+                    onClick={() => invoke("open_accessibility_settings")}
+                    className="mt-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors"
+                  >
+                    Open Settings
+                  </button>
+                </div>
+              )}
+              {settings.clipShortcuts && axGranted && (
+                <p className="text-xs text-zinc-600">Accessibility granted — shortcuts paste directly</p>
+              )}
             </div>
           </div>
           <div className="px-4 py-3 border-t border-zinc-800">

@@ -835,7 +835,7 @@ export default function App() {
                   <p className="text-xs text-zinc-600 mt-0.5">You are on an older version</p>
                 </div>
                 <button
-                  onClick={() => openUrl("https://releases.graviton.tools/stash/mac")}
+                  onClick={() => openUrl("https://releases.graviton.tools/stash/mac-arm64")}
                   className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors"
                 >
                   Download

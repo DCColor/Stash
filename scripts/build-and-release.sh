@@ -2,8 +2,7 @@
 set -e
 
 VERSION=$(node -p "require('./package.json').version")
-BUCKET="graviton"
-PRODUCT="stash"
+PRODUCT="stash"   # R2 keys are the uploader's business now, so no bucket name lives here
 # Graviton naming convention: <App>-<version>-<arch>.<ext> (DISTRIBUTION.md).
 # The old Stash_<version>_universal.dmg was a lie after the Intel drop — the build is
 # arm64-only. Set explicitly here rather than left to a Tauri default: this script builds
@@ -115,41 +114,63 @@ if [ "$staple_ok" -ne 1 ]; then
 fi
 echo "  done: .app inside the DMG validates"
 
+# ── Publish via the shared uploader ───────────────────────────────────────────────────────
+# This script used to upload to current/ and archive/ itself and hand-write the manifest.
+# That manifest emitted "assets": { "mac": ... } and no "notes" — neither is the contract in
+# DISTRIBUTION.md, which requires the platform key mac-arm64 and a notes array. It resolved
+# only because the Worker's PLATFORMS list still carries a legacy 'mac'. Accident, not
+# contract, and it drifted the moment the schema moved.
+#
+# The uploader owns all of it now: version from package.json, upload to current/ and
+# archive/<version>/, notes parsed from RELEASE_NOTES.md, a schema-correct manifest, and a
+# prune of superseded files from current/. The manifest cannot drift again because nothing
+# here writes one.
+UPLOAD_SCRIPT="../../Graviton-Releases/upload-release.sh"
+if [ ! -f "$UPLOAD_SCRIPT" ]; then
+  echo "ERROR: shared uploader not found at $UPLOAD_SCRIPT"
+  echo "Graviton-Releases must be checked out alongside this repo."
+  exit 1
+fi
+
 echo ""
-echo "Uploading to R2..."
-wrangler r2 object put ${BUCKET}/${PRODUCT}/current/${DMG_NAME} \
-  --file "$DMG_PATH" --remote
-echo "  done: current/${DMG_NAME}"
+bash "$UPLOAD_SCRIPT" "$PRODUCT"
 
-wrangler r2 object put ${BUCKET}/${PRODUCT}/archive/${VERSION}/${DMG_NAME} \
-  --file "$DMG_PATH" --remote
-echo "  done: archive/${VERSION}/${DMG_NAME}"
-
+# ── Verify the manifest that is actually being served ─────────────────────────────────────
+# DISTRIBUTION.md: the uploader asserts filenames it never checks, so a release can appear to
+# succeed while publishing a manifest naming a file that is not there. Manifold is the only
+# product that catches this. Five attempts, three seconds apart, cachebusted for the edge.
 echo ""
-echo "Writing manifest..."
-UPDATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-cat > /tmp/stash-manifest.json << MANIFEST
-{
-  "product": "stash",
-  "version": "${VERSION}",
-  "updated": "${UPDATED}",
-  "assets": {
-    "mac": "${DMG_NAME}"
-  }
-}
-MANIFEST
-
-wrangler r2 object put ${BUCKET}/${PRODUCT}/current/manifest.json \
-  --file /tmp/stash-manifest.json \
-  --content-type application/json \
-  --remote
-rm /tmp/stash-manifest.json
-echo "  done: manifest.json"
+echo "Verifying published manifest..."
+verified=0
+for attempt in 1 2 3 4 5; do
+  BODY=$(curl -sSL "https://releases.graviton.tools/${PRODUCT}/manifest?cachebust=$(date +%s)-${attempt}" || true)
+  if MF_BODY="$BODY" MF_WANT_VERSION="$VERSION" MF_WANT_ASSET="$DMG_NAME" python3 -c '
+import json, os, sys
+try:
+    m = json.loads(os.environ["MF_BODY"])
+except Exception:
+    sys.exit(1)
+sys.exit(0 if m.get("version") == os.environ["MF_WANT_VERSION"]
+         and m.get("assets", {}).get("mac-arm64") == os.environ["MF_WANT_ASSET"]
+         else 1)
+'; then
+    verified=1
+    break
+  fi
+  echo "  attempt ${attempt}: manifest does not yet name ${VERSION} / ${DMG_NAME}"
+  sleep 3
+done
+if [ "$verified" -ne 1 ]; then
+  echo "ERROR: published manifest never named version ${VERSION} with mac-arm64 ${DMG_NAME}"
+  echo "Last response: $BODY"
+  exit 1
+fi
+echo "  done: manifest names ${VERSION} / mac-arm64 → ${DMG_NAME}"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Done! Stash v${VERSION} is live."
 echo ""
-echo "  Download: https://releases.graviton.tools/stash/mac"
+echo "  Download: https://releases.graviton.tools/stash/mac-arm64"
 echo "  Manifest: https://releases.graviton.tools/stash/manifest"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

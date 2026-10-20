@@ -3,6 +3,140 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
+use std::sync::{Arc, Mutex};
+use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
+use chrono::{Datelike, Timelike};
+
+#[derive(Default, Clone, serde::Serialize)]
+struct ZipProgress {
+    running: bool,
+    done: bool,
+    cancelled: bool,
+    total_bytes: u64,
+    written_bytes: u64,
+    output_path: String,
+    error: String,
+}
+
+struct ZipState(Arc<Mutex<ZipProgress>>);
+
+fn path_size(p: &std::path::Path) -> u64 {
+    let meta = match std::fs::symlink_metadata(p) { Ok(m) => m, Err(_) => return 0 };
+    if meta.file_type().is_symlink() { return 0; }
+    if meta.is_file() { return meta.len(); }
+    let mut total = 0;
+    if let Ok(entries) = std::fs::read_dir(p) {
+        for e in entries.flatten() {
+            if e.file_name() == ".DS_Store" { continue; }
+            total += path_size(&e.path());
+        }
+    }
+    total
+}
+
+fn common_parent(paths: &[String]) -> Option<std::path::PathBuf> {
+    let mut iter = paths.iter();
+    let first = std::path::Path::new(iter.next()?).parent()?.to_path_buf();
+    let mut common: Vec<_> = first.components().collect();
+    for p in iter {
+        let parent = std::path::Path::new(p).parent()?;
+        let comps: Vec<_> = parent.components().collect();
+        let n = common
+            .iter()
+            .zip(comps.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        common.truncate(n);
+    }
+    if common.is_empty() { return None; }
+    Some(common.iter().collect())
+}
+
+fn collect_entries(path: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    if path.file_name().map(|n| n == ".DS_Store").unwrap_or(false) { return; }
+    out.push(path.to_path_buf());
+    let meta = match std::fs::symlink_metadata(path) { Ok(m) => m, Err(_) => return };
+    if meta.is_dir() {
+        if let Ok(rd) = std::fs::read_dir(path) {
+            let mut children: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+            children.sort();
+            for c in children { collect_entries(&c, out); }
+        }
+    }
+}
+
+fn dos_time(meta: &std::fs::Metadata) -> zip::DateTime {
+    meta.modified()
+        .ok()
+        .map(|t| chrono::DateTime::<chrono::Local>::from(t))
+        .and_then(|dt| zip::DateTime::from_date_and_time(
+            dt.year() as u16, dt.month() as u8, dt.day() as u8,
+            dt.hour() as u8, dt.minute() as u8, dt.second() as u8,
+        ).ok())
+        .unwrap_or_default()
+}
+
+const CANCELLED: &str = "__cancelled__";
+
+fn write_zip(
+    shared: &std::sync::Arc<Mutex<ZipProgress>>,
+    paths: &[String],
+    base: &std::path::Path,
+    dest: &str,
+    skip: &[&std::path::Path],
+) -> Result<(), String> {
+    let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(std::io::BufWriter::with_capacity(1 << 20, file));
+
+    let mut entries = Vec::new();
+    for p in paths { collect_entries(std::path::Path::new(p), &mut entries); }
+    // The archive may be written inside a folder being archived; never include it in itself
+    entries.retain(|e| !skip.contains(&e.as_path()));
+
+    let mut buf = vec![0u8; 1 << 20];
+    let mut written: u64 = 0;
+
+    for path in entries {
+        if shared.lock().map(|s| s.cancelled).unwrap_or(false) {
+            return Err(CANCELLED.into());
+        }
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let name = path.strip_prefix(base)
+            .map_err(|_| format!("{} is outside the common parent", path.display()))?
+            .to_string_lossy()
+            .to_string();
+
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .last_modified_time(dos_time(&meta))
+            .unix_permissions(meta.permissions().mode() & 0o7777);
+
+        if meta.file_type().is_symlink() {
+            let target = std::fs::read_link(&path).map_err(|e| e.to_string())?;
+            zip.add_symlink(name, target.to_string_lossy(), opts).map_err(|e| e.to_string())?;
+        } else if meta.is_dir() {
+            zip.add_directory(name, opts).map_err(|e| e.to_string())?;
+        } else {
+            zip.start_file(name, opts.large_file(meta.len() >= 0xFFFF_FFFF))
+                .map_err(|e| e.to_string())?;
+            let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+            loop {
+                let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+                if n == 0 { break; }
+                zip.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                written += n as u64;
+                if let Ok(mut s) = shared.lock() {
+                    s.written_bytes = written;
+                    if s.cancelled { return Err(CANCELLED.into()); }
+                }
+            }
+        }
+    }
+
+    zip.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -217,6 +351,96 @@ fn set_menu_bar_mode(app: tauri::AppHandle, enabled: bool) {
     }
 }
 
+#[tauri::command]
+fn start_zip(
+    state: tauri::State<ZipState>,
+    paths: Vec<String>,
+    output: String,
+) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("No files selected".into());
+    }
+    {
+        let s = state.0.lock().map_err(|e| e.to_string())?;
+        if s.running {
+            return Err("A zip is already running".into());
+        }
+    }
+
+    let base = common_parent(&paths).ok_or("Could not determine a common parent folder")?;
+
+    {
+        let mut s = state.0.lock().map_err(|e| e.to_string())?;
+        *s = ZipProgress {
+            running: true,
+            done: false,
+            cancelled: false,
+            total_bytes: 0,
+            written_bytes: 0,
+            output_path: output.clone(),
+            error: String::new(),
+        };
+    }
+
+    let shared = state.inner().0.clone();
+    let paths_owned = paths.clone();
+    std::thread::spawn(move || {
+        let total: u64 = paths_owned.iter().map(|p| path_size(std::path::Path::new(p))).sum();
+        if let Ok(mut s) = shared.lock() { s.total_bytes = total; }
+
+        if shared.lock().map(|s| s.cancelled).unwrap_or(false) {
+            if let Ok(mut s) = shared.lock() { s.running = false; s.done = true; }
+            return;
+        }
+
+        let partial = format!("{}.stash-partial", output);
+        let skip = [std::path::Path::new(&output), std::path::Path::new(&partial)];
+        let result = write_zip(&shared, &paths_owned, &base, &partial, &skip);
+
+        let mut final_error = String::new();
+        match result {
+            Ok(()) => {
+                if let Err(e) = std::fs::rename(&partial, &output) {
+                    let _ = std::fs::remove_file(&partial);
+                    final_error = format!("could not move archive into place: {}", e);
+                }
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&partial);
+                if e != CANCELLED { final_error = e; }
+            }
+        }
+
+        if let Ok(mut s) = shared.lock() {
+            s.running = false;
+            s.done = true;
+            s.error = final_error;
+            if s.error.is_empty() && !s.cancelled { s.written_bytes = s.total_bytes; }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_zip_progress(state: tauri::State<ZipState>) -> ZipProgress {
+    state.0.lock().map(|s| s.clone()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn cancel_zip(state: tauri::State<ZipState>) {
+    if let Ok(mut s) = state.0.lock() {
+        if s.running {
+            s.cancelled = true;
+        }
+    }
+}
+
+#[tauri::command]
+fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -225,6 +449,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(ZipState(Arc::new(Mutex::new(ZipProgress::default()))))
         .invoke_handler(tauri::generate_handler![
             get_frontmost_app,
             set_menu_bar_mode,
@@ -233,7 +458,11 @@ pub fn run() {
             paste_to_frontmost,
             get_file_dates,
             list_folder_files,
-            set_file_dates
+            set_file_dates,
+            start_zip,
+            get_zip_progress,
+            cancel_zip,
+            path_exists
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

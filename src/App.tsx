@@ -3,9 +3,10 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { readDir, rename } from "@tauri-apps/plugin-fs";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, ask } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 
 const MAX_CLIPS = 20;
@@ -86,9 +87,15 @@ const loadClips = async (): Promise<ClipItem[]> => {
   }
 };
 
+interface ZipProgress {
+  running: boolean; done: boolean; cancelled: boolean;
+  total_bytes: number; written_bytes: number;
+  output_path: string; error: string;
+}
+
 export default function App() {
   const [clips, setClips] = useState<ClipItem[]>([]);
-  const [activeTab, setActiveTab] = useState<"clipboard" | "rename" | "dates" | "settings">("clipboard");
+  const [activeTab, setActiveTab] = useState<"clipboard" | "rename" | "dates" | "zip" | "settings">("clipboard");
   const [lastClip, setLastClip] = useState("");
   const [folderPath, setFolderPath] = useState("");
   const [files, setFiles] = useState<string[]>([]);
@@ -107,6 +114,11 @@ export default function App() {
   const [dateTarget, setDateTarget] = useState<"modified" | "created" | "both">("modified");
   const [dateStatus, setDateStatus] = useState("");
   const [pendingOp, setPendingOp] = useState<DateOp | null>(null);
+  const [zipItems, setZipItems] = useState<string[]>([]);
+  const [zipName, setZipName] = useState("");
+  const [zipDest, setZipDest] = useState("");
+  const [zipProgress, setZipProgress] = useState<ZipProgress | null>(null);
+  const [zipDragOver, setZipDragOver] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
   const [axGranted, setAxGranted] = useState(false);
@@ -447,6 +459,92 @@ export default function App() {
       hour: "numeric", minute: "2-digit"
     }) : "—";
 
+  const baseName = (p: string) => p.split("/").filter(Boolean).pop() || p;
+  const parentDir = (p: string) => p.replace(/\/[^/]+\/?$/, "");
+
+  const fmtBytes = (n: number) => {
+    if (n < 1024) return `${n} B`;
+    const units = ["KB", "MB", "GB", "TB"];
+    let v = n / 1024, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+  };
+
+  const addZipItems = (paths: string[]) => {
+    if (paths.length === 0) return;
+    setZipItems((prev) => [...prev, ...paths.filter((p) => !prev.includes(p))]);
+    setZipName((n) => n || (paths.length === 1 ? baseName(paths[0]) : "Archive"));
+    setZipDest((d) => d || parentDir(paths[0]));
+    setZipProgress(null);
+  };
+
+  const pickZipFiles = async () => {
+    const selected = await open({ multiple: true, title: "Add files" });
+    if (!selected) return;
+    addZipItems(Array.isArray(selected) ? selected : [selected]);
+  };
+
+  const pickZipFolder = async () => {
+    const selected = await open({ directory: true, multiple: true, title: "Add folders" });
+    if (!selected) return;
+    addZipItems(Array.isArray(selected) ? selected : [selected]);
+  };
+
+  const pickZipDest = async () => {
+    const selected = await open({ directory: true, multiple: false, title: "Choose destination" });
+    if (selected && typeof selected === "string") setZipDest(selected);
+  };
+
+  const zipOutputPath = () => {
+    const name = zipName.trim().replace(/\.zip$/i, "") || "Archive";
+    return `${zipDest.replace(/\/$/, "")}/${name}.zip`;
+  };
+
+  const startZip = async () => {
+    if (zipItems.length === 0 || !zipDest) return;
+    const output = zipOutputPath();
+    if (await invoke<boolean>("path_exists", { path: output })) {
+      const replace = await ask(`${baseName(output)} already exists in this folder. Replace it?`, { title: "Replace file?", kind: "warning" });
+      if (!replace) return;
+    }
+    try {
+      await invoke("start_zip", { paths: zipItems, output });
+      setZipProgress({ running: true, done: false, cancelled: false, total_bytes: 0, written_bytes: 0, output_path: output, error: "" });
+    } catch (e) {
+      setZipProgress({ running: false, done: true, cancelled: false, total_bytes: 0, written_bytes: 0, output_path: output, error: String(e) });
+    }
+  };
+
+  const zipPercent = () => {
+    if (!zipProgress) return 0;
+    if (zipProgress.done && !zipProgress.error && !zipProgress.cancelled) return 100;
+    if (zipProgress.total_bytes === 0) return 0;
+    return Math.min(99, Math.floor((zipProgress.written_bytes / zipProgress.total_bytes) * 100));
+  };
+
+  useEffect(() => {
+    if (!zipProgress?.running) return;
+    const t = setInterval(async () => {
+      try { setZipProgress(await invoke<ZipProgress>("get_zip_progress")); } catch {}
+    }, 200);
+    return () => clearInterval(t);
+  }, [zipProgress?.running]);
+
+  useEffect(() => {
+    if (activeTab !== "zip") return;
+    let unlisten: (() => void) | null = null;
+    getCurrentWebview().onDragDropEvent((event) => {
+      const p = event.payload;
+      if (p.type === "over" || p.type === "enter") setZipDragOver(true);
+      else if (p.type === "leave") setZipDragOver(false);
+      else if (p.type === "drop") {
+        setZipDragOver(false);
+        if (p.paths?.length) addZipItems(p.paths);
+      }
+    }).then((f) => { unlisten = f; });
+    return () => { if (unlisten) unlisten(); };
+  }, [activeTab]);
+
   return (
     <div className="min-h-screen bg-zinc-900 text-zinc-100 flex flex-col select-none">
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-600" />
@@ -468,6 +566,12 @@ export default function App() {
           className={"px-3 py-1 rounded text-sm font-medium transition-colors " + (activeTab === "dates" ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white")}
         >
           Dates
+        </button>
+        <button
+          onClick={() => setActiveTab("zip")}
+          className={"px-3 py-1 rounded text-sm font-medium transition-colors " + (activeTab === "zip" ? "bg-blue-600 text-white" : "text-zinc-400 hover:text-white")}
+        >
+          Zip
         </button>
       </div>
 
@@ -734,6 +838,129 @@ export default function App() {
               <span className="text-xs text-zinc-500">{dateStatus}</span>
             </div>
             <span className="text-xs text-zinc-600">{dateFiles.length} files</span>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "zip" && (
+        <div className="flex flex-col flex-1 overflow-hidden">
+          <div className="px-4 py-3 space-y-3 border-b border-zinc-800">
+            <div
+              className={"rounded-lg border border-dashed px-4 py-5 text-center transition-colors " + (zipDragOver ? "border-blue-500 bg-blue-950/30" : "border-zinc-700")}
+            >
+              <p className="text-sm text-zinc-300">Drop files or folders here</p>
+              <div className="flex justify-center gap-2 mt-3">
+                <button onClick={pickZipFiles} disabled={zipProgress?.running} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-200 text-sm rounded border border-zinc-700 transition-colors">Add files</button>
+                <button onClick={pickZipFolder} disabled={zipProgress?.running} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-200 text-sm rounded border border-zinc-700 transition-colors">Add folders</button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={zipName}
+                onChange={(e) => setZipName(e.target.value)}
+                placeholder="Archive name"
+                disabled={zipProgress?.running}
+                className="flex-1 bg-zinc-800 text-sm text-zinc-200 placeholder-zinc-600 rounded px-3 py-1.5 border border-zinc-700 focus:border-blue-500 focus:outline-none"
+              />
+              <span className="text-sm text-zinc-500">.zip</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={zipDest}
+                readOnly
+                placeholder="Choose a destination folder"
+                className="flex-1 bg-zinc-800 text-sm text-zinc-400 placeholder-zinc-600 rounded px-3 py-1.5 border border-zinc-700 focus:outline-none truncate"
+              />
+              <button onClick={pickZipDest} disabled={zipProgress?.running} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-200 text-sm rounded border border-zinc-700 transition-colors">Browse</button>
+            </div>
+
+            {zipProgress && (
+              <div className="space-y-1.5">
+                <div className="h-1.5 w-full bg-zinc-800 rounded-full overflow-hidden">
+                  <div
+                    className={"h-full transition-all duration-200 " + (zipProgress.error ? "bg-red-500" : "bg-blue-500")}
+                    style={{ width: `${zipPercent()}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className={zipProgress.error ? "text-red-400" : "text-zinc-500"}>
+                    {zipProgress.error
+                      ? zipProgress.error
+                      : zipProgress.cancelled
+                      ? "Cancelled"
+                      : zipProgress.done
+                      ? `Done — ${fmtBytes(zipProgress.written_bytes)}`
+                      : zipProgress.total_bytes === 0
+                      ? "Preparing…"
+                      : `${fmtBytes(zipProgress.written_bytes)} of ${fmtBytes(zipProgress.total_bytes)}`}
+                  </span>
+                  <span className="text-zinc-500">
+                    {zipProgress.running && zipProgress.total_bytes > 0 && `${zipPercent()}%`}
+                    {zipProgress.done && !zipProgress.error && !zipProgress.cancelled && (
+                      <button onClick={() => revealItemInDir(zipProgress.output_path)} className="text-blue-400 hover:text-blue-300 transition-colors">
+                        Show in Finder
+                      </button>
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              {zipProgress?.running ? (
+                <button onClick={() => invoke("cancel_zip")} className="px-4 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm rounded border border-zinc-700 transition-colors">
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  onClick={startZip}
+                  disabled={zipItems.length === 0 || !zipDest}
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
+                >
+                  Create zip
+                </button>
+              )}
+              <span className="text-xs text-zinc-600">No compression — stored as-is</span>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-3 py-2">
+            {zipItems.length === 0 && (
+              <div className="flex items-center justify-center h-24 text-zinc-600 text-sm">Nothing added yet</div>
+            )}
+            {zipItems.map((p) => (
+              <div key={p} className="group flex items-center gap-2 py-1.5 border-b border-zinc-800">
+                <span className="text-sm text-zinc-200 truncate flex-1">{baseName(p)}</span>
+                <span className="text-xs text-zinc-600 truncate max-w-[50%]">{parentDir(p)}</span>
+                {!zipProgress?.running && (
+                  <button
+                    onClick={() => setZipItems((prev) => prev.filter((x) => x !== p))}
+                    className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 text-xs transition-all"
+                  >x</button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="px-4 py-3 border-t border-zinc-800 flex items-center justify-between">
+            <span
+              onClick={() => setActiveTab((prev) => prev === "settings" ? "zip" : "settings")}
+              className="relative text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors text-base"
+              title="Settings"
+            >
+              ⚙️
+              {updateAvailable && <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full" />}
+            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-zinc-600">{zipItems.length} {zipItems.length === 1 ? "item" : "items"}</span>
+              {zipItems.length > 0 && !zipProgress?.running && (
+                <button onClick={() => { setZipItems([]); setZipProgress(null); setZipName(""); setZipDest(""); }} className="text-xs text-zinc-500 hover:text-red-400 transition-colors">Clear</button>
+              )}
+            </div>
           </div>
         </div>
       )}

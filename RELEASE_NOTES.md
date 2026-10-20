@@ -5,6 +5,16 @@ uploader, which parses the section matching the version being released and puts 
 into the R2 manifest as a `notes` array. Keep entries short — they render in an update
 prompt, not on a changelog page. Format notes are at the bottom.
 
+## 0.6.0
+
+- New Zip tab: create zero-compression archives by dropping in files or folders, or adding them with the buttons. Folder structure is preserved.
+- Archives are true Stored zips, with 0% compression, for fast archiving of media that's already compressed.
+- Filenames with accents or special characters, including macOS screenshot names, display correctly on Windows and in other unzip tools.
+- Supports files and archives larger than 4 GB.
+- Progress bar shows bytes written as the archive builds, with a Cancel button.
+- Cancelling or failing partway never damages an existing archive of the same name. The original is only replaced once the new one is complete.
+- .DS_Store files are left out, and symlinks are stored as links instead of copying their targets.
+
 ## 0.5.8
 
 - New Dates tab: view a file's created and modified timestamps, and set them.

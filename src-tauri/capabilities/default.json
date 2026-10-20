@@ -23,6 +23,7 @@
     "fs:allow-write-text-file",
     "fs:scope-appdata-recursive",
     "opener:allow-open-url",
+    "opener:allow-default-urls",
     "opener:allow-reveal-item-in-dir",
     "dialog:allow-open",
     "dialog:allow-message"

@@ -5,6 +5,12 @@ uploader, which parses the section matching the version being released and puts 
 into the R2 manifest as a `notes` array. Keep entries short — they render in an update
 prompt, not on a changelog page. Format notes are at the bottom.
 
+## 0.6.1
+
+- Fixed the Download button in Settings → Updates, which did nothing when clicked.
+- Fixed the "More from Graviton.Tools" link in the footer.
+- Earlier versions can't open download links from inside the app. If you're on 0.6.0 or earlier, download this update from https://releases.graviton.tools/stash/mac-arm64
+
 ## 0.6.0
 
 - New Zip tab: create zero-compression archives by dropping in files or folders, or adding them with the buttons. Folder structure is preserved.

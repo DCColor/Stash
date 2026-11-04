@@ -2,7 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(grep -n \"Stash\" /Users/robbiecarman/Code/Stash/Stash/src/App.tsx)",
-      "Read(//Users/robbiecarman/Nextcloud/**)"
+      "Read(~/Code/**)"
     ],
     "additionalDirectories": [
       "/Users/robbiecarman/Code/Graviton-Releases"
